@@ -1,0 +1,192 @@
+services:
+  rabbitmq1:
+    image: rabbitmq:3-management
+    hostname: rabbitmq1
+    env_file:
+      - .env 
+    ports:
+      - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_MGMT_PORT}:15672"
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=${RABBITMQ_ERLANG_COOKIE}
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+    networks:
+      - backend
+
+  rabbitmq2:
+    image: rabbitmq:3-management
+    hostname: rabbitmq2
+    env_file:
+      - .env 
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=${RABBITMQ_ERLANG_COOKIE}
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      - rabbitmq1
+    networks:
+      - backend
+
+  db:
+    image: postgres:15
+    restart: always
+    env_file:
+      - .env 
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - backend
+  server:
+    build: ./Service1
+    env_file:
+      - .env 
+    environment:
+      - RABBITMQ_HOST=rabbitmq1
+      - QUEUE_NAME=udp_messages
+    depends_on:
+      - rabbitmq1
+    expose:
+      - "${PORT}/udp"
+    networks:
+      - backend
+    cap_drop:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      replicas: 2
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "${PORT}:${PORT}/udp"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf.template:ro
+    environment:
+      - UDP_PORT=${PORT}
+    command: /bin/sh -c "envsubst < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+    depends_on:
+      - server
+    networks:
+      - backend
+
+  client:
+    build: ./Source1
+    env_file:
+      - .env 
+    environment:
+      - SERVER_ADDR=nginx
+      - SERVER_PORT=${PORT}
+    depends_on:
+      - nginx
+    deploy:
+      replicas: 3
+    networks:
+      - backend
+
+  consumer:
+    build: ./Consumer
+    env_file:
+      - .env 
+    environment:
+      - RABBITMQ_HOST=rabbitmq1
+      - QUEUE_NAME=udp_messages
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=${POSTGRES_PORT}
+    depends_on:
+      - rabbitmq1
+      - db
+    networks:
+      - backend
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - backend
+
+  rabbitmq-exporter:
+    image: kbudde/rabbitmq-exporter
+    ports:
+      - "${RABBITMQ_EXPORTER_PORT}:9419"
+    environment:
+      - RABBIT_URL=http://rabbitmq1:${RABBITMQ_MGMT_PORT}
+      - RABBIT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBIT_PASSWORD=${RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      - rabbitmq1
+    networks:
+      - backend
+
+  node-exporter:
+    image: prom/node-exporter
+    ports:
+      - "${NODE_EXPORTER_PORT}:9100"
+    networks:
+      - backend
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter
+    ports:
+      - "${POSTGRES_EXPORTER_PORT}:9187"
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+    depends_on:
+      - db
+    networks:
+      - backend
+
+  loki:
+    image: grafana/loki:2.9.0
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "${LOKI_PORT}:3100"
+    networks:
+      - backend
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    networks:
+      - backend
+    depends_on:
+      - loki
+    configs:
+      - source: promtail_config
+        target: /etc/promtail/promtail-config.yaml
+
+configs:
+  promtail_config:
+    file: ./promtail-config.yaml
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  db_data:

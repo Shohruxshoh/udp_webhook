@@ -1,0 +1,5 @@
+pika
+python-json-logger
+pyjwt
+python-dotenv
+psycopg2-binary
