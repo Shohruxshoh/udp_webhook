@@ -68,8 +68,8 @@ The project also includes:
 ### 1️⃣ Clone the Repository
 
 ``` bash
-git clone https://github.com/yourusername/mohirdev.git
-cd mohirdev
+git clone https://github.com/Shohruxshoh/udp_webhook.git
+cd udp_webhook
 ```
 
 ### 2️⃣ Build and Start Services
